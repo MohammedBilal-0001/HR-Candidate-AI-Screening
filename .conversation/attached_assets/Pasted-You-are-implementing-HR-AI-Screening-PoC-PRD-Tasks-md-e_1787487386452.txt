@@ -1,0 +1,38 @@
+You are implementing HR_AI_Screening_PoC_PRD_Tasks.md exactly as written, task by task, in order.
+Do not skip ahead, do not merge tasks, and do not summarize/paraphrase the spec — follow it literally.
+
+Non-negotiable rules, apply to every single task:
+
+1. NO mock, sample, seed, or placeholder data anywhere in the app or codebase — no arrays like
+   `sampleCandidates`, `demoJobs`, `mockResults`, no hardcoded scores, no hardcoded names
+   ("John Doe", "Jane Smith", "Admin", "Test User", etc.), no fake numbers standing in for a
+   real calculation. If a screen has nothing yet, render a real empty state, not fake rows.
+
+2. NO hardcoded user, candidate, or admin identities anywhere — no default/demo accounts,
+   no placeholder "admin" role, no pre-filled names in forms or components. Every name/identity
+   shown in the UI must come from data the user actually entered or a real Gemini extraction —
+   never from a literal string you wrote into the code.
+
+3. Convex is the only database. Do not introduce localStorage, SQLite, an in-memory array, or
+   any other persistence layer for candidates/pools/jobs/runs/scores. (Exception: the Gemini
+   API key lives in browser localStorage only, per the PRD's BYOK section — nothing else does.)
+
+4. Every button, form, and action in the UI must call a real Convex query/mutation/action.
+   If something isn't wired yet, do not render it — an unwired button is worse than a missing one.
+
+5. Every AI feature must make a real HTTP call to the Gemini API using the model in
+   GEMINI_MODEL and the key from Settings. Never stub, fake, or hardcode a Gemini response
+   "temporarily" — if the wrapper isn't built yet, the feature isn't done yet.
+
+6. After finishing each task, do not move to the next one until you have actually performed
+   the task's "Definition of Done" check from the PRD in the running app — real file upload,
+   real button click, real Convex dashboard row — and confirmed it passes. State explicitly
+   which Definition of Done checks you verified and what you observed (e.g. "uploaded CV_A.pdf
+   and CV_B.txt, confirmed candidates table has two rows with different extracted skills").
+
+7. If you are ever tempted to hardcode something to make a screen "look done," stop and
+   implement the real data path instead, even if it takes longer or costs more of this session.
+
+Start with Task 0 and work sequentially through Task 10. After each task, report what you
+built, what you tested, and the actual output you saw (not what you expect it to show) before
+continuing.

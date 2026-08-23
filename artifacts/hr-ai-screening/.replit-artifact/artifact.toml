@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "HR AI Candidate Screening"
+description = "A full-stack HR screening workspace for creating candidate pools, extracting structured CV and job data with Gemini, running transparent matching, and reviewing deterministic eligibility scores."
+version = "1.0.0"
+id = "artifacts/hr-ai-screening"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18331
+
+[services.development]
+run = "pnpm --filter @workspace/hr-ai-screening run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/hr-ai-screening", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/hr-ai-screening/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18331"
+BASE_PATH = "/"

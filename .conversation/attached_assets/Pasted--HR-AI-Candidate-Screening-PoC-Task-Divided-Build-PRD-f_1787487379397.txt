@@ -1,0 +1,436 @@
+# HR AI Candidate Screening — PoC (Task-Divided Build PRD for Replit)
+
+*Stack: React + Vite + TypeScript + Tailwind + Convex. Built on Replit, deployed to Vercel. BYOK Gemini (Google AI Studio, free tier). No login.*
+
+## ⚠️ Hard rules — read before starting any task
+
+These apply to **every** task below. A task is not done if any of these are violated.
+
+1. **Convex is the only database.** Do not use localStorage, SQLite, IndexedDB, or an in-memory JS array for candidates, pools, jobs, runs, or scores. (The one and only exception: the Gemini API key itself lives in browser `localStorage` — nothing else does.)
+2. **No mock, seed, hardcoded, or placeholder data anywhere in the shipped app.** No `const sampleCandidates = [...]`, no fake ranking numbers, no "TODO: wire this up." If a screen has nothing to show yet because the user hasn't created anything, show an empty state — not fake rows.
+3. **Every button calls a real Convex function.** If a button doesn't yet have a working handler, don't render it — don't ship a button that does nothing or just logs to console.
+4. **AI features must call the real Gemini API**, using the model in `GEMINI_MODEL` and the key the user entered in Settings, via `fetch` from a Convex action. Do not stub extraction with a hardcoded JSON response "for now."
+5. **Build and verify each task before moving to the next one.** After each task, actually perform the action in the running app (upload a real CV, click Start Matching, etc.) and confirm real data lands in the Convex dashboard tables — not just that the UI renders.
+6. Work through the tasks **in order**. Task *N* assumes Task *N-1* is fully working end-to-end, not just scaffolded.
+
+---
+
+## Task 0 — Project Setup
+
+**Goal:** empty but real, connected full stack.
+
+- `npm create convex@latest` with the Vite + React + TypeScript template.
+- Install Tailwind.
+- Write `convex/schema.ts` exactly as specified in Task 1 below (write it now, even though nothing uses it yet).
+- Confirm `npx convex dev` runs and the Convex dashboard shows the empty tables.
+- Confirm the React app loads and can run one trivial Convex query (e.g. a hardcoded `ping` query returning `"ok"`) to prove the frontend↔Convex connection works before building anything real on top of it. Delete the `ping` query once confirmed.
+
+**Definition of Done:** Convex dashboard shows the schema's tables (empty). Frontend successfully reads from Convex over the wire, confirmed in browser network tab — not just "no errors in console."
+
+---
+
+## Task 1 — Convex Schema
+
+**Goal:** every table the rest of the app needs, created once, correctly.
+
+```ts
+// convex/schema.ts
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+
+export default defineSchema({
+  candidates: defineTable({
+    sourceDocumentId: v.id("_storage"),
+    name: v.optional(v.string()),
+    email: v.optional(v.string()),
+    location: v.optional(v.string()),
+    education: v.array(
+      v.object({ degree: v.string(), field: v.string(), institution: v.string() })
+    ),
+    totalYearsExperience: v.number(),
+    relevantYearsExperience: v.optional(v.number()),
+    experienceHistory: v.array(
+      v.object({ title: v.string(), company: v.string(), summary: v.optional(v.string()) })
+    ),
+    skills: v.array(v.string()),
+    projects: v.array(v.object({ name: v.string(), summary: v.string(), skills: v.array(v.string()) })),
+    extractionConfidence: v.number(),
+    createdAt: v.number(),
+  }),
+
+  candidatePools: defineTable({
+    name: v.string(),
+    description: v.optional(v.string()),
+    createdAt: v.number(),
+  }),
+
+  poolMembers: defineTable({
+    poolId: v.id("candidatePools"),
+    candidateId: v.id("candidates"),
+  }).index("by_pool", ["poolId"]),
+
+  jobDescriptions: defineTable({
+    title: v.string(),
+    rawText: v.string(),
+    canonicalJson: v.any(),
+    createdAt: v.number(),
+  }),
+
+  runs: defineTable({
+    poolId: v.id("candidatePools"),
+    jobId: v.id("jobDescriptions"),
+    status: v.union(
+      v.literal("CREATED"), v.literal("MATCHING"),
+      v.literal("SCORING"), v.literal("COMPLETED"), v.literal("PARTIAL")
+    ),
+    weights: v.object({
+      experience: v.number(), skills: v.number(), education: v.number(), other: v.number(),
+    }),
+    activeSkillNames: v.array(v.string()),
+    createdAt: v.number(),
+  }),
+
+  matchQueue: defineTable({
+    runId: v.id("runs"),
+    candidateId: v.id("candidates"),
+    status: v.union(
+      v.literal("PENDING"), v.literal("PROCESSING"),
+      v.literal("DONE"), v.literal("FAILED")
+    ),
+    attempts: v.number(),
+  }).index("by_run_status", ["runId", "status"]),
+
+  matchAssessments: defineTable({
+    runId: v.id("runs"),
+    candidateId: v.id("candidates"),
+    requirementName: v.string(),
+    category: v.union(
+      v.literal("skill"), v.literal("experience"),
+      v.literal("education"), v.literal("other")
+    ),
+    mandatory: v.boolean(),
+    result: v.union(
+      v.literal("MATCH"), v.literal("PARTIAL"),
+      v.literal("NO_MATCH"), v.literal("UNKNOWN")
+    ),
+    confidence: v.number(),
+    evidence: v.optional(v.string()),
+    reason: v.optional(v.string()),
+    candidateYears: v.optional(v.number()), // only set on the "experience" row
+  }).index("by_run_candidate", ["runId", "candidateId"]),
+
+  candidateScores: defineTable({
+    runId: v.id("runs"),
+    candidateId: v.id("candidates"),
+    eligibility: v.union(v.literal("ELIGIBLE"), v.literal("REVIEW"), v.literal("INELIGIBLE")),
+    experienceContribution: v.number(),
+    skillsContribution: v.number(),
+    educationContribution: v.number(),
+    otherContribution: v.number(),
+    finalScore: v.number(),
+    reviewReasons: v.array(v.string()),
+    calculatedAt: v.number(),
+  }).index("by_run", ["runId"]),
+});
+```
+
+**Definition of Done:** `npx convex dev` deploys this schema with no errors. All 8 tables visible in the Convex dashboard.
+
+---
+
+## Task 2 — Gemini Client Wrapper (shared by every AI task)
+
+**Goal:** one real, working function that every later task reuses. Build and test this in isolation before anything else touches Gemini.
+
+- `convex/lib/gemini.ts`, a `"use node"` file, exporting:
+  ```ts
+  export async function callGeminiJson(
+    systemInstruction: string,
+    userContent: string,
+    responseSchema: object,
+    apiKey: string,
+    model: string = process.env.GEMINI_MODEL ?? "gemini-2.0-flash"
+  ): Promise<any>
+  ```
+  It must:
+  - POST to the real Gemini API (`https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}`).
+  - Set `generationConfig.responseMimeType = "application/json"` and `generationConfig.responseSchema = responseSchema`.
+  - Parse and return the JSON from the response. Throw a typed error (`GeminiAuthError`, `GeminiRateLimitError`, `GeminiOtherError`) based on status code, so calling code can react differently to 401/403 vs 429 vs other failures.
+- Write one throwaway Convex action `testGemini(apiKey: string)` that calls `callGeminiJson` with a trivial prompt ("say hello in JSON `{greeting: string}`") and returns the result, so you can verify against a real key from the Convex dashboard function runner before building the CV/JD/matching features on top of it.
+
+**Definition of Done:** running `testGemini` from the Convex dashboard with a real Gemini API key returns a real Gemini response — actually check the response is not hardcoded, by changing the prompt and seeing the output change. Delete `testGemini` once confirmed (or keep it behind a dev-only flag).
+
+---
+
+## Task 3 — BYOK Settings
+
+**Goal:** a working, real key-entry flow, wired to every later Gemini call.
+
+- Header component with a "Settings" icon that opens a modal.
+- Modal: input for Gemini API key, "Save" writes to `localStorage['gemini_api_key']`, "Clear" removes it.
+- A `useGeminiKey()` React hook reading/writing that localStorage value, used everywhere a Gemini call is triggered from the UI.
+- If no key is set, any button that would trigger a Gemini call (CV upload, JD extraction, Start Matching) must be disabled with a tooltip "Add your Gemini API key in Settings first" — not just silently fail when clicked.
+
+**Definition of Done:** entering a key, refreshing the page, and reopening Settings shows the key still saved. Clearing it disables the AI-dependent buttons immediately.
+
+---
+
+## Task 4 — Candidate Pool CRUD (no AI yet, pure Convex)
+
+**Goal:** pools and members fully working against Convex before AI is layered on.
+
+Convex functions:
+- `pools.create({ name, description })` — mutation
+- `pools.list()` — query
+- `pools.get({ poolId })` — query, returns pool + its members (joined with candidate names)
+- `pools.removeMember({ poolId, candidateId })` — mutation, deletes only the `poolMembers` row
+
+UI:
+- `/pools` — list of real pools from `pools.list()`, "Create Pool" form that actually calls `pools.create`.
+- `/pools/:id` — real member list from `pools.get`, "Remove" button that calls `removeMember` and the list re-renders (Convex reactivity — no manual refetch needed).
+
+**Definition of Done:** create a pool in the UI, see it appear in the Convex dashboard `candidatePools` table with the exact name typed. Refresh the browser — pool still there, loaded from Convex, not from any client-side state.
+
+---
+
+## Task 5 — CV Extraction (first real AI feature)
+
+**Goal:** uploading a real CV file produces a real Convex `candidates` row from a real Gemini call — no shortcuts.
+
+Convex:
+- `candidates.extractCv` — action, `"use node"`. Args: `{ storageId, apiKey }`.
+  1. Fetch file from Convex storage.
+  2. If PDF, extract text with `pdf-parse`. If TXT, read directly.
+  3. Call `callGeminiJson` (Task 2) with the CV-extraction system prompt below and a schema matching the `candidates` table.
+  4. Insert the result into `candidates` via an internal mutation, with `sourceDocumentId` and `createdAt`.
+  5. Return the new `candidateId`.
+- `pools.uploadCvs` — action. Args: `{ poolId, storageIds: string[], apiKey }`. For each file: upload to storage (if not already), call `extractCv`, then insert a `poolMembers` row linking the result to `poolId`.
+
+System prompt for extraction:
+```
+You extract structured data from a CV/resume. Return ONLY the requested JSON schema.
+Rules:
+- Never guess a field you cannot support with text in the CV. Omit optional fields you can't support.
+- "relevantYearsExperience" should reflect years relevant to AI/ML/software engineering roles,
+  distinct from totalYearsExperience if the CV shows unrelated work history. If you cannot
+  reliably separate them, omit relevantYearsExperience entirely rather than guessing.
+- Normalize obvious skill synonyms (e.g. "pytorch" -> "PyTorch") but do not invent skills
+  not mentioned in the text.
+```
+
+UI:
+- On `/pools/:id`, a real file input (accept `.pdf,.txt`) + "Upload & Extract" button that calls `pools.uploadCvs` with the browser-held Gemini key.
+- Show a real per-file progress state (`uploading → extracting → done/failed`) driven by actual promise resolution, not a `setTimeout` fake progress bar.
+- Also implement "Add existing candidate" — a real search box hitting a `candidates.search({ query })` query, and a button that inserts a real `poolMembers` row for the selected candidate.
+
+**Definition of Done:** upload a real, differently-worded CV (PDF and TXT, one of each). Confirm in the Convex dashboard that a new `candidates` row exists with fields that actually reflect that CV's content (not the same values every time — test with two different CVs and confirm the extracted skills/experience differ). Confirm `poolMembers` links it to the pool.
+
+---
+
+## Task 6 — JD Extraction & Weight Policy
+
+**Goal:** pasting a real JD produces a real canonical JD JSON via Gemini, editable by HR before any matching happens.
+
+Convex:
+- `jobs.extractJd` — action. Args: `{ rawText, apiKey }`. Calls Gemini with the JD system prompt below, inserts into `jobDescriptions` with `canonicalJson` set to the raw model output (this is the source of truth — nothing else re-derives it).
+- `jobs.list()` / `jobs.get({ jobId })` — queries.
+- `jobs.updateWeights({ jobId, weights })` and `jobs.updateSkills({ jobId, skills })` — mutations that patch `canonicalJson` in place. No Gemini call.
+
+System prompt:
+```
+You convert a job description into a structured hiring specification. Return ONLY JSON
+matching the schema. For each skill, include a mandatory flag (true only if the JD text
+clearly states it as required, not "nice to have"/"plus"/"preferred") and an importance
+score from 0.0 to 1.0 reflecting how central it is to the role based on the JD's own wording.
+Also propose top-level category weights (experience/skills/education/other) that sum to 100,
+based on how much emphasis the JD places on each area. These are a starting suggestion —
+a human will review and can change them.
+```
+
+UI:
+- `/jobs` — list + "Create Job" (textarea for raw JD text + "Extract" button calling `extractJd`).
+- `/jobs/:id` — renders the real `canonicalJson`: editable weight sliders/inputs (must sum to 100, validate live) and an editable skill table (toggle mandatory, edit importance). "Save" calls `updateWeights`/`updateSkills` — real Convex writes, not local component state that resets on refresh.
+
+**Definition of Done:** paste two different JDs, confirm the extracted skills/weights differ between them in the Convex dashboard. Edit a weight in the UI, refresh the page, confirm the edit persisted (proves it's a real Convex write, not client state).
+
+---
+
+## Task 7 — Matching Engine (queue + real Gemini calls, rate-limit safe)
+
+**Goal:** clicking "Start Matching" actually runs real Gemini calls for every candidate in the pool, sequentially, with visible live progress — not a fake loading spinner.
+
+Convex:
+- `runs.start({ poolId, jobId, apiKey })` — mutation:
+  1. Insert `runs` row, `weights`/`activeSkillNames` copied from the job's current `canonicalJson`, status `MATCHING`.
+  2. Insert one `matchQueue` row per pool member, status `PENDING`.
+  3. Schedule `matching.processQueue({ runId, apiKey })` via `ctx.scheduler.runAfter(0, ...)`.
+  4. Return `runId`.
+- `matching.processQueue` — internal action, self-rescheduling:
+  ```ts
+  export const processQueue = internalAction({
+    args: { runId: v.id("runs"), apiKey: v.string() },
+    handler: async (ctx, { runId, apiKey }) => {
+      const next = await ctx.runQuery(internal.matching.getNextPending, { runId });
+      if (!next) {
+        await ctx.runMutation(internal.matching.markRunComplete, { runId });
+        return;
+      }
+      await ctx.runMutation(internal.matching.markProcessing, { queueId: next._id });
+      try {
+        const judgments = await callGeminiMatch(next.candidate, next.jd, apiKey); // uses gemini.ts
+        await ctx.runMutation(internal.matching.storeAssessments, {
+          runId, candidateId: next.candidateId, judgments,
+        });
+        await ctx.runMutation(internal.matching.markDone, { queueId: next._id });
+      } catch (e) {
+        await ctx.runMutation(internal.matching.markFailedOrRetry, { queueId: next._id, error: String(e) });
+      }
+      const delay = Number(process.env.GEMINI_CALL_DELAY_MS ?? 4000);
+      await ctx.scheduler.runAfter(delay, internal.matching.processQueue, { runId, apiKey });
+    },
+  });
+  ```
+  - On a `GeminiRateLimitError`, retry the same queue item up to 3 times with backoff (2s/4s/8s) before marking `FAILED` — implement this as an `attempts` counter check inside `markFailedOrRetry`, re-enqueuing to `PENDING` instead of `FAILED` if `attempts < 3`.
+- Matching system prompt (used inside `callGeminiMatch`):
+  ```
+  Given a candidate profile JSON and a job requirement, judge whether the candidate satisfies
+  that requirement. For EACH requirement (every skill, plus experience, plus education, plus
+  each "other" item) return: result (MATCH/PARTIAL/NO_MATCH/UNKNOWN), confidence (0-1),
+  evidence (a short quote or paraphrase from the candidate profile, or null), reason (one
+  sentence), and for the experience item specifically also return candidateYears (number).
+  Rules:
+  - A missing field is NEVER a positive match — if you cannot find evidence, return UNKNOWN,
+    not NO_MATCH and not MATCH.
+  - NO_MATCH means you found evidence the candidate does NOT have it; UNKNOWN means you found
+    no evidence either way.
+  - Do not let unrelated total years of experience inflate a domain-specific requirement —
+    judge relevant experience only.
+  ```
+
+UI:
+- `/runs/new` — real pool picker + job picker (from `pools.list`/`jobs.list`), "Start Matching" calls `runs.start`, then redirects to `/runs/:id`.
+- `/runs/:id` — a live queue status table (`useQuery` on `runs.getStatus`, which Convex will auto-update as rows change — no polling code needed): candidate name, status (PENDING/PROCESSING/DONE/FAILED), with a "Retry" button on FAILED rows that resets that row to PENDING and re-kicks `processQueue`.
+
+**Definition of Done:** start a run against a real pool of 2–3 candidates and a real JD. Watch the queue table update live in the browser as each candidate moves PENDING → PROCESSING → DONE, with a real multi-second delay between them (confirm this isn't instant — instant means Gemini isn't actually being called sequentially). Check the Convex dashboard `matchAssessments` table has real per-requirement rows with real evidence text pulled from that candidate's actual CV content.
+
+---
+
+## Task 8 — Eligibility Gate + Deterministic Scoring (pure functions, no AI, no network)
+
+**Goal:** real scores computed from the real `matchAssessments` written in Task 7.
+
+Convex (`convex/scoring.ts`, plain TS functions plus a query wrapper):
+
+```ts
+export function computeEligibility(assessments: MatchAssessment[]) {
+  const mandatory = assessments.filter(a => a.mandatory);
+  const hasConfidentFailure = mandatory.some(a => a.result === "NO_MATCH" && a.confidence >= 0.75);
+  if (hasConfidentFailure) {
+    return { status: "INELIGIBLE" as const, reasons: ["A mandatory requirement was confidently not met."] };
+  }
+  const uncertain = mandatory.filter(a => a.result === "UNKNOWN" || a.result === "PARTIAL" || a.confidence < 0.75);
+  if (uncertain.length > 0) {
+    return {
+      status: "REVIEW" as const,
+      reasons: uncertain.map(a => `"${a.requirementName}" is uncertain (${a.result}, ${Math.round(a.confidence * 100)}% confidence).`),
+    };
+  }
+  return { status: "ELIGIBLE" as const, reasons: [] };
+}
+
+export function scoreCandidate(
+  assessments: MatchAssessment[],
+  jd: CanonicalJD,
+  weights: { experience: number; skills: number; education: number; other: number },
+  activeSkillNames: string[]
+) {
+  const RESULT_VALUE = { MATCH: 1.0, PARTIAL: 0.5, NO_MATCH: 0.0, UNKNOWN: 0.0 };
+
+  const activeSkills = jd.skills.filter(s => activeSkillNames.includes(s.name));
+  const totalImportance = activeSkills.reduce((sum, s) => sum + s.importance, 0);
+  const skillsScore = activeSkills.reduce((sum, s) => {
+    const a = assessments.find(x => x.requirementName === s.name);
+    const value = a ? RESULT_VALUE[a.result] : 0;
+    const share = totalImportance > 0 ? s.importance / totalImportance : 0;
+    return sum + value * share;
+  }, 0);
+  const skillsContribution = weights.skills * skillsScore;
+
+  const expAssessment = assessments.find(a => a.category === "experience");
+  const candidateYears = expAssessment?.candidateYears ?? 0;
+  const requiredYears = jd.experience.minimumYears;
+  const minFitShare = weights.experience * 0.8;
+  const bonusShare = weights.experience * 0.2;
+  const minFit = Math.min(candidateYears / requiredYears, 1.0) * minFitShare;
+  const bonus = candidateYears > requiredYears
+    ? Math.min(((candidateYears - requiredYears) / requiredYears) * bonusShare, bonusShare)
+    : 0;
+  const experienceContribution = minFit + bonus;
+
+  const eduAssessment = assessments.find(a => a.category === "education");
+  const educationContribution = weights.education * (eduAssessment ? RESULT_VALUE[eduAssessment.result] : 0);
+
+  const otherAssessments = assessments.filter(a => a.category === "other");
+  const otherAvg = otherAssessments.length
+    ? otherAssessments.reduce((s, a) => s + RESULT_VALUE[a.result], 0) / otherAssessments.length
+    : 0;
+  const otherContribution = weights.other * otherAvg;
+
+  return {
+    experienceContribution, skillsContribution, educationContribution, otherContribution,
+    finalScore: experienceContribution + skillsContribution + educationContribution + otherContribution,
+  };
+}
+```
+
+- `scores.recalculate({ runId })` — mutation. Reads all `matchAssessments` for the run, the run's current `weights`/`activeSkillNames`, computes eligibility + score per candidate via the functions above, and **upserts** `candidateScores` rows. Call this automatically at the end of `markRunComplete` (Task 7), and again any time `runs.updatePolicy` (Task 9) changes weights/active skills.
+- `scores.getResults({ runId })` — query returning ranked eligible candidates (sorted by `finalScore` desc) + the review/ineligible bucket separately.
+
+**Definition of Done:** after a run completes, `candidateScores` has real rows with numbers that actually change if you manually edit a `matchAssessments.result` value in the Convex dashboard and re-run `recalculate` — proving the math reads real stored data, not a hardcoded return value.
+
+---
+
+## Task 9 — Dashboard: Ranking, Review Bucket, Live Recalculation
+
+**Goal:** the actual demo screen, fully wired — this is where "just UI, non-functional buttons" must not happen again.
+
+`/runs/:id` full layout:
+- **Header:** JD title, pool name, candidate count, run status — all from `runs.getStatus`.
+- **Policy panel:** current weights (editable inputs, must sum to 100 to save) and active skills (checkboxes). "Apply" calls `runs.updatePolicy({ runId, weights, activeSkillNames })` — a mutation that updates the `runs` row and immediately calls `scores.recalculate`. No Gemini call, and the UI must visibly update within Convex's normal reactive latency (near-instant) — verify by toggling a skill and watching the ranked table reorder without a page refresh.
+- **Ranking table:** from `scores.getResults`, real rank/name/score/eligibility badge.
+- **Review/Excluded bucket:** REVIEW and INELIGIBLE candidates, with their real `reviewReasons` shown.
+- **Evidence panel:** clicking a candidate row shows their real `matchAssessments` (per requirement: result, confidence, evidence, reason) from `matchAssessments` filtered by `runId` + `candidateId`.
+
+**Definition of Done:** with a completed run, toggle a skill off in the Policy panel and confirm (a) the ranked table reorders correctly, (b) `candidateScores` in the Convex dashboard shows updated numbers, (c) no new `matchAssessments` rows were created (proving zero Gemini calls happened) and (d) no network request to `generativelanguage.googleapis.com` fired (check browser Network tab).
+
+---
+
+## Task 10 — Deploy
+
+- `npx convex deploy` (using the Convex deploy key you'll provide).
+- Push to GitHub, import into Vercel, set `VITE_CONVEX_URL` to the deployed Convex URL.
+- Set Convex environment variables `GEMINI_MODEL` and `GEMINI_CALL_DELAY_MS` via the Convex dashboard (not `.env` committed to git).
+- Smoke test on the live Vercel URL: create a pool, upload a real CV, create a JD, run a match, confirm eligibility/scoring/recalculation all work against production Convex — repeat the Definition of Done checks from Tasks 5–9 on the deployed app, not just locally.
+
+**Definition of Done:** the live Vercel URL performs every action above against production Convex with zero mock data and real Gemini calls, verified the same way as each task above.
+
+---
+
+## Environment Variables
+
+```
+# Convex dashboard env vars
+GEMINI_MODEL=gemini-2.0-flash
+GEMINI_CALL_DELAY_MS=4000
+
+# Vercel env var
+VITE_CONVEX_URL=<from convex deploy output>
+```
+
+Gemini API key is never an env var — BYOK, browser `localStorage` only (Task 3).
+
+---
+
+## Out of Scope
+
+Auth/SSO/RBAC, ATS integration, interview scheduling, fine-tuning, PII redaction pipeline, fairness/bias monitoring, candidate deduplication, OCR/image CVs, DOCX parsing.
