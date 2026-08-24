@@ -32,15 +32,15 @@ export const insert = internalMutation({
 });
 export const extractCv = action({
   args: { storageId: v.id("_storage"), apiKey: v.string() },
-  handler: async (ctx, { storageId, apiKey }) => {
+  handler: async (ctx, { storageId, apiKey }): Promise<any> => {
     const url = await ctx.storage.getUrl(storageId);
     if (!url) throw new Error("Uploaded CV could not be found.");
     const response = await fetch(url);
     const bytes = new Uint8Array(await response.arrayBuffer());
     let text = new TextDecoder().decode(bytes);
     if (response.headers.get("content-type")?.includes("pdf") || bytes.slice(0, 4).toString() === "37,80,68,70") {
-      const pdfParse = (await import("pdf-parse")).default;
-      text = (await pdfParse(Buffer.from(bytes))).text;
+      const pdfParse = await import("pdf-parse");
+      text = (await (pdfParse as any).default(Buffer.from(bytes))).text;
     }
     const profile = await callGeminiJson(
       "You extract structured data from a CV/resume. Return ONLY the requested JSON schema. Never guess a field you cannot support. Normalize obvious skill synonyms but do not invent skills.",

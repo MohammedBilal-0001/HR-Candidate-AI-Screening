@@ -1,0 +1,1 @@
+- [Convex frontend deployment](convex-frontend.md) — generated bindings outside the artifact need a Vite alias and workspace-root filesystem access.

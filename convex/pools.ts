@@ -1,5 +1,5 @@
 import { action, internalMutation, mutation, query } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
 
 export const list = query({ args: {}, handler: async (ctx) => ctx.db.query("candidatePools").order("desc").collect() });
@@ -23,10 +23,10 @@ export const removeMember = mutation({ args: { poolId: v.id("candidatePools"), c
 }});
 export const uploadCvs = action({
   args: { poolId: v.id("candidatePools"), storageIds: v.array(v.id("_storage")), apiKey: v.string() },
-  handler: async (ctx, { poolId, storageIds, apiKey }) => {
+  handler: async (ctx, { poolId, storageIds, apiKey }): Promise<any> => {
     const ids = [];
     for (const storageId of storageIds) {
-      const candidateId = await ctx.runAction(internal.candidates.extractCv, { storageId, apiKey });
+      const candidateId = await ctx.runAction(api.candidates.extractCv, { storageId, apiKey });
       await ctx.runMutation(internal.pools.addMemberInternal, { poolId, candidateId });
       ids.push(candidateId);
     }

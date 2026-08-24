@@ -11,7 +11,7 @@ const jdSchema = { type: "OBJECT", properties: {
 }, required: ["title", "experience", "skills", "education", "other", "weights"] };
 export const list = query({ args: {}, handler: async (ctx) => ctx.db.query("jobDescriptions").order("desc").collect() });
 export const get = query({ args: { jobId: v.id("jobDescriptions") }, handler: (ctx, { jobId }) => ctx.db.get(jobId) });
-export const extractJd = action({ args: { rawText: v.string(), apiKey: v.string() }, handler: async (ctx, { rawText, apiKey }) => {
+export const extractJd = action({ args: { rawText: v.string(), apiKey: v.string() }, handler: async (ctx, { rawText, apiKey }): Promise<any> => {
   const canonicalJson = await callGeminiJson("Convert a job description into a structured hiring specification. Return ONLY JSON. Mark mandatory true only when clearly required and propose weights summing to 100.", rawText, jdSchema, apiKey);
   return await ctx.runMutation(internal.jobs.insert, { rawText, canonicalJson });
 }});

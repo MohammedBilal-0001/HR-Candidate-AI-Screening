@@ -50,6 +50,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, 'src'),
+      '@convex': path.resolve(import.meta.dirname, '..', '..', 'convex'),
       '@assets': path.resolve(
         import.meta.dirname,
         '..',
@@ -71,6 +72,7 @@ export default defineConfig({
     allowedHosts: true,
     fs: {
       strict: true,
+      allow: [path.resolve(import.meta.dirname, '..', '..')],
     },
   },
   preview: {
