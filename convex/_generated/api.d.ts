@@ -11,6 +11,7 @@
 import type * as candidates from "../candidates.js";
 import type * as jobs from "../jobs.js";
 import type * as lib_gemini from "../lib/gemini.js";
+import type * as lib_inputGuard from "../lib/inputGuard.js";
 import type * as matching from "../matching.js";
 import type * as pools from "../pools.js";
 import type * as runs from "../runs.js";
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   candidates: typeof candidates;
   jobs: typeof jobs;
   "lib/gemini": typeof lib_gemini;
+  "lib/inputGuard": typeof lib_inputGuard;
   matching: typeof matching;
   pools: typeof pools;
   runs: typeof runs;

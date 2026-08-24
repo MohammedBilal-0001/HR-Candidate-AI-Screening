@@ -24,13 +24,17 @@ export const removeMember = mutation({ args: { poolId: v.id("candidatePools"), c
 export const uploadCvs = action({
   args: { poolId: v.id("candidatePools"), storageIds: v.array(v.id("_storage")), apiKey: v.string() },
   handler: async (ctx, { poolId, storageIds, apiKey }): Promise<any> => {
-    const ids = [];
+    const results = [];
     for (const storageId of storageIds) {
-      const candidateId = await ctx.runAction(api.candidates.extractCv, { storageId, apiKey });
-      await ctx.runMutation(internal.pools.addMemberInternal, { poolId, candidateId });
-      ids.push(candidateId);
+      try {
+        const candidateId = await ctx.runAction(api.candidates.extractCv, { storageId, apiKey });
+        await ctx.runMutation(internal.pools.addMemberInternal, { poolId, candidateId });
+        results.push({ storageId, candidateId });
+      } catch (e) {
+        results.push({ storageId, error: e instanceof Error ? e.message : String(e) });
+      }
     }
-    return ids;
+    return results;
   },
 });
 

@@ -15,6 +15,7 @@ export default defineSchema({
     skills: v.array(v.string()),
     projects: v.array(v.object({ name: v.string(), summary: v.string(), skills: v.array(v.string()) })),
     extractionConfidence: v.number(),
+    securityFlag: v.optional(v.string()),
     createdAt: v.number(),
   }),
   candidatePools: defineTable({ name: v.string(), description: v.optional(v.string()), createdAt: v.number() }),
@@ -24,6 +25,7 @@ export default defineSchema({
     poolId: v.id("candidatePools"), jobId: v.id("jobDescriptions"),
     status: v.union(v.literal("CREATED"), v.literal("MATCHING"), v.literal("SCORING"), v.literal("COMPLETED"), v.literal("PARTIAL")),
     weights: v.object({ experience: v.number(), skills: v.number(), education: v.number(), other: v.number() }),
+    categoryWeights: v.optional(v.record(v.string(), v.number())),
     activeSkillNames: v.array(v.string()),
     activeRequirementNames: v.array(v.string()),
     createdAt: v.number(),
@@ -35,9 +37,10 @@ export default defineSchema({
   }).index("by_run_status", ["runId", "status"]),
   matchAssessments: defineTable({
     runId: v.id("runs"), candidateId: v.id("candidates"), requirementName: v.string(),
-    category: v.union(v.literal("skill"), v.literal("experience"), v.literal("education"), v.literal("other")),
+    category: v.string(),
     mandatory: v.boolean(), result: v.union(v.literal("MATCH"), v.literal("PARTIAL"), v.literal("NO_MATCH"), v.literal("UNKNOWN")),
     confidence: v.number(), evidence: v.optional(v.string()), reason: v.optional(v.string()), candidateYears: v.optional(v.number()),
+    flag: v.optional(v.union(v.literal("lexical_overlap"), v.literal("uniform_anomaly"))),
   }).index("by_run_candidate", ["runId", "candidateId"]),
   candidateScores: defineTable({
     runId: v.id("runs"), candidateId: v.id("candidates"),
