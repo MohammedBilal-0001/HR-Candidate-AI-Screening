@@ -15,6 +15,7 @@ import {
   PoolDetailPage,
   PoolsPage,
   RunDetailPage,
+  RunsListPage,
 } from '@/pages/screening-pages';
 import {
   Route,
@@ -37,6 +38,7 @@ function Router() {
           <Route path="/pools/:id" component={PoolDetailPage} />
           <Route path="/jobs" component={JobsPage} />
           <Route path="/jobs/:id" component={JobDetailPage} />
+          <Route path="/runs" component={RunsListPage} />
           <Route path="/runs/new" component={NewRunPage} />
           <Route path="/runs/:id" component={RunDetailPage} />
           <Route component={NotFound} />

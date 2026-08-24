@@ -30,6 +30,11 @@ export const insert = internalMutation({
   args: { sourceDocumentId: v.id("_storage"), profile: v.any() },
   handler: async (ctx, { sourceDocumentId, profile }) => ctx.db.insert("candidates", { sourceDocumentId, ...profile, createdAt: Date.now() }),
 });
+
+export const insertFromText = internalMutation({
+  args: { rawText: v.string(), profile: v.any() },
+  handler: async (ctx, { rawText, profile }) => ctx.db.insert("candidates", { rawText, ...profile, createdAt: Date.now() }),
+});
 export const extractCv = action({
   args: { storageId: v.id("_storage"), apiKey: v.string() },
   handler: async (ctx, { storageId, apiKey }): Promise<any> => {
@@ -43,9 +48,21 @@ export const extractCv = action({
       text = (await (pdfParse as any).default(Buffer.from(bytes))).text;
     }
     const profile = await callGeminiJson(
-      "You extract structured data from a CV/resume. Return ONLY the requested JSON schema. Never guess a field you cannot support. Normalize obvious skill synonyms but do not invent skills.",
+      "You extract structured data from a CV/resume. Return ONLY the requested JSON schema. Rules: - Never guess a field you cannot support with text in the CV. Omit optional fields you can't support. - \"relevantYearsExperience\" should reflect years relevant to AI/ML/software engineering roles, distinct from totalYearsExperience if the CV shows unrelated work history. If you cannot reliably separate them, omit relevantYearsExperience entirely rather than guessing. - Normalize obvious skill synonyms (e.g. \"pytorch\" -> \"PyTorch\") but do not invent skills not mentioned in the text. CV",
       text, candidateSchema, apiKey,
     );
+    console.log("profile",profile);
     return await ctx.runMutation(internal.candidates.insert, { sourceDocumentId: storageId, profile });
+  },
+});
+
+export const extractCvFromText = action({
+  args: { rawText: v.string(), apiKey: v.string() },
+  handler: async (ctx, { rawText, apiKey }): Promise<any> => {
+    const profile = await callGeminiJson(
+      "You extract structured data from a CV/resume. Return ONLY the requested JSON schema. Rules: - Never guess a field you cannot support with text in the CV. Omit optional fields you can't support. - \"relevantYearsExperience\" should reflect years relevant to AI/ML/software engineering roles, distinct from totalYearsExperience if the CV shows unrelated work history. If you cannot reliably separate them, omit relevantYearsExperience entirely rather than guessing. - Normalize obvious skill synonyms (e.g. \"pytorch\" -> \"PyTorch\") but do not invent skills not mentioned in the text. CV",
+      rawText, candidateSchema, apiKey,
+    );
+    return await ctx.runMutation(internal.candidates.insertFromText, { rawText, profile });
   },
 });

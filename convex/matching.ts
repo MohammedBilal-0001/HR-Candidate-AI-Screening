@@ -2,7 +2,7 @@ import { internalAction, internalMutation, internalQuery, query } from "./_gener
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { callGeminiJson, GeminiRateLimitError } from "./lib/gemini";
-
+//import process from "node:process";
 export const getNextPending = internalQuery({ args: { runId: v.id("runs") }, handler: async (ctx, { runId }) => {
   const rows = await ctx.db.query("matchQueue").withIndex("by_run_status", (q) => q.eq("runId", runId).eq("status", "PENDING")).collect();
   const row = rows[0]; if (!row) return null;
@@ -19,6 +19,9 @@ export const markFailedOrRetry = internalMutation({ args: { queueId: v.id("match
 export const storeAssessments = internalMutation({
   args: { runId: v.id("runs"), candidateId: v.id("candidates"), judgments: v.array(v.object({ requirementName: v.string(), category: v.union(v.literal("skill"), v.literal("experience"), v.literal("education"), v.literal("other")), mandatory: v.boolean(), result: v.union(v.literal("MATCH"), v.literal("PARTIAL"), v.literal("NO_MATCH"), v.literal("UNKNOWN")), confidence: v.number(), evidence: v.optional(v.string()), reason: v.optional(v.string()), candidateYears: v.optional(v.number()) })) },
   handler: async (ctx, { runId, candidateId, judgments }) => {
+    // Replace any prior judgments so retries can't leave contradictory assessments.
+    const existing = await ctx.db.query("matchAssessments").withIndex("by_run_candidate", (q) => q.eq("runId", runId).eq("candidateId", candidateId)).collect();
+    for (const row of existing) await ctx.db.delete(row._id);
     for (const judgment of judgments) await ctx.db.insert("matchAssessments", { runId, candidateId, ...judgment });
   },
 });
@@ -35,7 +38,7 @@ export const processQueue = internalAction({ args: { runId: v.id("runs"), apiKey
   await ctx.runMutation(internal.matching.markProcessing, { queueId: next.queueId });
   const schema = { type: "ARRAY", items: { type: "OBJECT", properties: { requirementName: { type: "STRING" }, category: { type: "STRING", enum: ["skill", "experience", "education", "other"] }, mandatory: { type: "BOOLEAN" }, result: { type: "STRING", enum: ["MATCH", "PARTIAL", "NO_MATCH", "UNKNOWN"] }, confidence: { type: "NUMBER" }, evidence: { type: "STRING" }, reason: { type: "STRING" }, candidateYears: { type: "NUMBER" } }, required: ["requirementName", "category", "mandatory", "result", "confidence", "reason"] } };
   try {
-    const judgments = await callGeminiJson("Judge every job requirement against the candidate profile. Missing evidence is UNKNOWN, not a positive match. Return one row per skill, experience, education, and other requirement with evidence and reason.", JSON.stringify({ candidate: next.candidate, job: next.jd }), schema, apiKey);
+    const judgments = await callGeminiJson("Judge every job requirement against the candidate profile. Missing evidence is UNKNOWN, not a positive match. Return one row per skill, experience, education, and other requirement with evidence and reason. Use the job's experience.minimum_years and education.acceptable_fields to evaluate those categories. IMPORTANT: For experience category, use requirementName exactly 'experience'. For education category, use requirementName exactly 'education'. For skills, use the exact skill name from the job description. For other requirements, use the exact name from the job description. Rules: A missing field is NEVER a positive match — if you cannot find evidence, return UNKNOWN, not NO_MATCH and not MATCH. NO_MATCH means you found evidence the candidate does NOT have it; UNKNOWN means you found no evidence either way. Copy the mandatory flag exactly as given in the job description for each requirement — do not decide it yourself. Do not let unrelated total years of experience inflate a domain-specific requirement — judge relevant experience only.", JSON.stringify({ candidate: next.candidate, job: next.jd }), schema, apiKey);
     await ctx.runMutation(internal.matching.storeAssessments, { runId, candidateId: next.candidateId, judgments });
     await ctx.runMutation(internal.matching.markDone, { queueId: next.queueId });
   } catch (e) {

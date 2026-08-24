@@ -8,6 +8,7 @@ import {
   CircleHelp,
   FileSearch,
   FolderKanban,
+  History,
   KeyRound,
   LayoutDashboard,
   Menu,
@@ -33,6 +34,7 @@ export const navItems: Array<{ href: string; label: string; icon: IconType }> = 
   { href: '/', label: 'Overview', icon: LayoutDashboard },
   { href: '/pools', label: 'Candidate pools', icon: UsersRound },
   { href: '/jobs', label: 'Job descriptions', icon: BriefcaseBusiness },
+  { href: '/runs', label: 'Match history', icon: History },
 ];
 
 export function Button({

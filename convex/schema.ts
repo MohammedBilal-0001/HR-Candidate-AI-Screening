@@ -3,7 +3,8 @@ import { v } from "convex/values";
 
 export default defineSchema({
   candidates: defineTable({
-    sourceDocumentId: v.id("_storage"),
+    sourceDocumentId: v.optional(v.id("_storage")),
+    rawText: v.optional(v.string()),
     name: v.optional(v.string()),
     email: v.optional(v.string()),
     location: v.optional(v.string()),
@@ -23,7 +24,9 @@ export default defineSchema({
     poolId: v.id("candidatePools"), jobId: v.id("jobDescriptions"),
     status: v.union(v.literal("CREATED"), v.literal("MATCHING"), v.literal("SCORING"), v.literal("COMPLETED"), v.literal("PARTIAL")),
     weights: v.object({ experience: v.number(), skills: v.number(), education: v.number(), other: v.number() }),
-    activeSkillNames: v.array(v.string()), createdAt: v.number(),
+    activeSkillNames: v.array(v.string()),
+    activeRequirementNames: v.array(v.string()),
+    createdAt: v.number(),
   }),
   matchQueue: defineTable({
     runId: v.id("runs"), candidateId: v.id("candidates"),

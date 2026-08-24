@@ -33,6 +33,15 @@ export const uploadCvs = action({
     return ids;
   },
 });
+
+export const uploadCvFromText = action({
+  args: { poolId: v.id("candidatePools"), rawText: v.string(), apiKey: v.string() },
+  handler: async (ctx, { poolId, rawText, apiKey }): Promise<any> => {
+    const candidateId = await ctx.runAction(api.candidates.extractCvFromText, { rawText, apiKey });
+    await ctx.runMutation(internal.pools.addMemberInternal, { poolId, candidateId });
+    return candidateId;
+  },
+});
 export const addMemberInternal = internalMutation({ args: { poolId: v.id("candidatePools"), candidateId: v.id("candidates") }, handler: async (ctx, args) => {
   const existing = await ctx.db.query("poolMembers").withIndex("by_pool", (q) => q.eq("poolId", args.poolId)).collect();
   if (!existing.some((m) => m.candidateId === args.candidateId)) await ctx.db.insert("poolMembers", args);

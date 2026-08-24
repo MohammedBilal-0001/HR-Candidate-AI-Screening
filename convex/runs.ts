@@ -4,6 +4,24 @@ import { v } from "convex/values";
 
 const weights = v.object({ experience: v.number(), skills: v.number(), education: v.number(), other: v.number() });
 
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    const runs = await ctx.db.query("runs").order("desc").collect();
+    return await Promise.all(runs.map(async (run) => {
+      const job = await ctx.db.get(run.jobId);
+      const pool = await ctx.db.get(run.poolId);
+      const queue = await ctx.db.query("matchQueue").withIndex("by_run_status", (q) => q.eq("runId", run._id)).collect();
+      return {
+        ...run,
+        jobTitle: job?.title ?? "Unknown job",
+        poolName: pool?.name ?? "Unknown pool",
+        candidateCount: queue.length,
+      };
+    }));
+  },
+});
+
 export const start = mutation({
   args: { poolId: v.id("candidatePools"), jobId: v.id("jobDescriptions"), apiKey: v.string() },
   handler: async (ctx, { poolId, jobId, apiKey }) => {
@@ -11,10 +29,15 @@ export const start = mutation({
     if (!job) throw new Error("Job not found.");
     const members = await ctx.db.query("poolMembers").withIndex("by_pool", (q) => q.eq("poolId", poolId)).collect();
     const policy = job.canonicalJson.weights;
+    const skills = (job.canonicalJson.skills ?? []).map((s: { name: string }) => s.name);
+    const other = (job.canonicalJson.other ?? []).map((o: { name: string }) => o.name);
+    const activeRequirementNames = [...skills, "experience", "education", ...other];
     const runId = await ctx.db.insert("runs", {
       poolId, jobId, status: "MATCHING",
       weights: { experience: Number(policy.experience), skills: Number(policy.skills), education: Number(policy.education), other: Number(policy.other) },
-      activeSkillNames: (job.canonicalJson.skills ?? []).map((s: { name: string }) => s.name), createdAt: Date.now(),
+      activeSkillNames: skills,
+      activeRequirementNames,
+      createdAt: Date.now(),
     });
     for (const member of members) await ctx.db.insert("matchQueue", { runId, candidateId: member.candidateId, status: "PENDING", attempts: 0 });
     await ctx.scheduler.runAfter(0, internal.matching.processQueue, { runId, apiKey });
@@ -36,11 +59,11 @@ export const getStatus = query({
 });
 
 export const updatePolicy = mutation({
-  args: { runId: v.id("runs"), weights, activeSkillNames: v.array(v.string()) },
-  handler: async (ctx, { runId, weights: nextWeights, activeSkillNames }) => {
+  args: { runId: v.id("runs"), weights, activeSkillNames: v.array(v.string()), activeRequirementNames: v.optional(v.array(v.string())) },
+  handler: async (ctx, { runId, weights: nextWeights, activeSkillNames, activeRequirementNames }) => {
     const total = Object.values(nextWeights).reduce((sum, value) => sum + value, 0);
     if (Math.abs(total - 100) > 0.01) throw new Error("Weights must sum to 100.");
-    await ctx.db.patch(runId, { weights: nextWeights, activeSkillNames });
+    await ctx.db.patch(runId, { weights: nextWeights, activeSkillNames, ...(activeRequirementNames !== undefined && { activeRequirementNames }) });
     await ctx.scheduler.runAfter(0, internal.scoring.recalculate, { runId });
   },
 });

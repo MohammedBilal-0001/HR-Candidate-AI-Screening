@@ -10,10 +10,19 @@ const jdSchema = {
     experience: {
       type: "OBJECT",
       properties: {
-        minimumYears: { type: "NUMBER" },
-        summary: { type: "STRING" },
+        minimum_years: { type: "NUMBER" },
+        domains: { type: "ARRAY", items: { type: "STRING" } },
+        mandatory: { type: "BOOLEAN" },
       },
-      required: ["minimumYears", "summary"],
+      required: ["minimum_years", "domains", "mandatory"],
+    },
+    education: {
+      type: "OBJECT",
+      properties: {
+        mandatory: { type: "BOOLEAN" },
+        acceptable_fields: { type: "ARRAY", items: { type: "STRING" } },
+      },
+      required: ["mandatory", "acceptable_fields"],
     },
     skills: {
       type: "ARRAY",
@@ -27,15 +36,18 @@ const jdSchema = {
         required: ["name", "mandatory", "importance"],
       },
     },
-    education: {
-      type: "OBJECT",
-      properties: {
-        requirement: { type: "STRING" },
-        mandatory: { type: "BOOLEAN" },
+    other: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          name: { type: "STRING" },
+          mandatory: { type: "BOOLEAN" },
+          importance: { type: "NUMBER" },
+        },
+        required: ["name", "mandatory", "importance"],
       },
-      required: ["requirement", "mandatory"],
     },
-    other: { type: "ARRAY", items: { type: "STRING" } },
     weights: {
       type: "OBJECT",
       properties: {
@@ -47,7 +59,7 @@ const jdSchema = {
       required: ["experience", "skills", "education", "other"],
     },
   },
-  required: ["title", "experience", "skills", "education", "other", "weights"],
+  required: ["title", "experience", "education", "skills", "other", "weights"],
 };
 export const list = query({
   args: {},
@@ -62,7 +74,7 @@ export const extractJd = action({
   args: { rawText: v.string(), apiKey: v.string() },
   handler: async (ctx, { rawText, apiKey }): Promise<any> => {
     const canonicalJson = await callGeminiJson(
-      'You are an HR assistant. Convert the following job description into a structured hiring specification. Return ONLY valid JSON matching this schema: { "skills": [ { "name": "string", "mandatory": boolean (true only if JD text clearly states the skill as required, not if it says \'nice to have\', \'plus\', \'preferred\', or similar), "importance": number between 0.0 and 1.0 reflecting how central the skill is to the role based on the JD\'s own wording } ], "categoryWeights": { "experience": number, "skills": number, "education": number, "other": number } where the four weights must sum to exactly 100, and each reflects how much emphasis the JD places on that category (use your judgment from the text). Do not include any extra text, explanations, or markdown. Job description:',
+      'You are a job description parser. Convert the raw job description text into a JSON object that EXACTLY matches this schema — same field names, same nesting, same casing:\n{\n  "title": string,\n  "experience": {\n    "minimum_years": number,\n    "domains": string[],\n    "mandatory": boolean\n  },\n  "education": {\n    "mandatory": boolean,\n    "acceptable_fields": string[]\n  },\n  "skills": [\n    { "name": string, "mandatory": boolean, "importance": number }\n  ],\n  "other": [\n    { "name": string, "mandatory": boolean, "importance": number }\n  ],\n  "weights": {\n    "experience": number,\n    "skills": number,\n    "education": number,\n    "other": number\n  }\n}\n\nRules:\n- "mandatory" on a skill/education/experience item is true ONLY if the JD text clearly states it as required — words like "must have", "required", "at least X years". If the JD says "preferred", "nice to have", "a plus", or "bonus", mandatory is false.\n- "importance" is a number from 0.00 to 1.00 reflecting how central that skill is to the role, based on how the JD itself emphasizes it (order mentioned, repetition, phrasing like "strong" or "hands-on" vs. a passing mention). Mandatory skills should generally score higher than optional ones, but do not force this mechanically — base it on the actual JD wording.\n- "acceptable_fields" should list the degree fields the JD names, plus "related" if the JD uses language like "or related field".\n- "weights.experience" + "weights.skills" + "weights.education" + "weights.other" MUST sum to exactly 100. Distribute them based on how much of the JD\'s text and emphasis is spent on each area. If the JD barely mentions education, its weight should be low (e.g. 10-15), not a default 25.\n- Do not invent skills, domains, or requirements that are not stated or clearly implied in the JD text. Do not add commentary, explanation, or markdown — return only the JSON object.\n\nJob description:',
       rawText,
       jdSchema,
       apiKey,
