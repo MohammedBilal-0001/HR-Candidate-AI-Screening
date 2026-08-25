@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm --filter ./artifacts/hr-ai-screening run typecheck && pnpm --filter ./artifacts/hr-ai-screening run build",
+  "outputDirectory": "artifacts/hr-ai-screening/dist/public"
+}
